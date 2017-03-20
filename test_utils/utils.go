@@ -145,21 +145,30 @@ func CreateContainer(netconf string, k8sName string, ip string) (container_id, n
 	}
 
 	// Set up the env for running the CNI plugin
-	//TODO pass in the env properly
-	var k8s_env = ""
+	cni_env := []string{
+		"CNI_COMMAND=ADD",
+		"CNI_IFNAME=eth0",
+		"CNI_PATH=dist",
+		fmt.Sprintf("CNI_CONTAINERID=%s", container_id),
+		fmt.Sprintf("CNI_NETNS=%s", netnspath),
+	}
+
 	if k8sName != "" {
-		k8s_env = fmt.Sprintf("CNI_ARGS=\"K8S_POD_NAME=%s;K8S_POD_NAMESPACE=test;K8S_POD_INFRA_CONTAINER_ID=whatever\"", k8sName)
+		cniArgs := fmt.Sprintf("CNI_ARGS=K8S_POD_NAME=%s;K8S_POD_NAMESPACE=test;K8S_POD_INFRA_CONTAINER_ID=whatever", k8sName)
 
 		// Append IP=<ip> to CNI_ARGS only if it's not an empty string.
 		if ip != "" {
-			k8s_env = fmt.Sprintf("%s;IP=%s\"", strings.TrimRight(k8s_env, "\""), ip)
+			cniArgs = cniArgs + fmt.Sprintf(";IP=%s", ip)
 		}
+
+		cni_env = append(cni_env, cniArgs)
 	}
-	cni_env := fmt.Sprintf("CNI_COMMAND=ADD CNI_CONTAINERID=%s CNI_NETNS=%s CNI_IFNAME=eth0 CNI_PATH=dist %s", container_id, netnspath, k8s_env)
 
 	// Run the CNI plugin passing in the supplied netconf
 	//TODO - Get rid of this PLUGIN thing and use netconf instead
-	subProcess := exec.Command("bash", "-c", fmt.Sprintf("%s dist/%s", cni_env, os.Getenv("PLUGIN")), netconf)
+	subProcess := exec.Command(fmt.Sprintf("dist/%s", os.Getenv("PLUGIN")), netconf)
+	subProcess.Env = cni_env
+
 	stdin, err := subProcess.StdinPipe()
 	if err != nil {
 		panic("some error found")
