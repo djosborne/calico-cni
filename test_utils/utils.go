@@ -126,10 +126,10 @@ func RunIPAMPlugin(netconf, command, args string) (types.Result, types.Error, in
 	return result, error, exitCode
 }
 
-func CreateContainerNamespace() (containerNs ns.NetNS, err error) {
-	containerNs, err = ns.NewNS()
+func CreateContainerNamespace() (containerNs ns.NetNS) {
+	containerNs, err := ns.NewNS()
 	if err != nil {
-		return nil, err
+		panic("Couldn't create container namespace.")
 	}
 
 	err = containerNs.Do(func(_ ns.NetNS) error {
@@ -140,11 +140,16 @@ func CreateContainerNamespace() (containerNs ns.NetNS, err error) {
 		return netlink.LinkSetUp(lo)
 	})
 
+	if err != nil {
+		panic("Couldn't create loopback interface in new container namespace")
+		// TODO: clean up ns?
+	}
+
 	return
 }
 
 func CreateContainer(netconf string, k8sName string, ip string) (container_id, netnspath string, session *gexec.Session, contVeth netlink.Link, contAddr []netlink.Addr, contRoutes []netlink.Route, err error) {
-	targetNs, err := CreateContainerNamespace()
+	targetNs := CreateContainerNamespace()
 	container_id, netnspath = GetContainerIdFromNs(targetNs)
 
 	if err != nil {
@@ -183,11 +188,17 @@ func GetNamespaceInfo(targetNs ns.NetNS) (contVeth netlink.Link, contAddr []netl
 func GetContainerIdFromNs(containerNs ns.NetNS) (containerId string, netnspath string) {
 	netnspath = containerNs.Path()
 	netnsname := path.Base(netnspath)
-	containerId = netnsname[:10]
-	return containerId, netnspath
+
+	if len(netnsname) < 10 {
+		panic("end of netnspath should be at least 10 characters.")
+	} else {
+		containerId = netnsname[:10]
+	}
+
+	return
 }
 
-func CallCniAdd(netconf string, k8sName string, ip string, containerNs ns.NetNS) (contVeth netlink.Link, err error) {
+func CallCniAdd(netconf string, k8sName string, ip string, containerNs ns.NetNS) {
 	containerId, netNsPath := GetContainerIdFromNs(containerNs)
 	// Set up the env for running the CNI plugin
 	cni_env := []string{

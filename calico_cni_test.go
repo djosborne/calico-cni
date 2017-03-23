@@ -252,8 +252,7 @@ var _ = Describe("CalicoCni", func() {
 		Context("when it was never called for SetUP", func() {
 			Context("and a namespace does exist", func() {
 				It("exits with 'success' error code", func() {
-					containerNs, err := CreateContainerNamespace()
-					Expect(err).ShouldNot(HaveOccurred())
+					containerNs := CreateContainerNamespace()
 					_, netnspath := GetContainerIdFromNs(containerNs)
 					exitCode, err := DeleteContainer(netconf, netnspath, "")
 					Expect(err).ShouldNot(HaveOccurred())
