@@ -78,11 +78,21 @@ func RunIPAMPlugin(netconf, command, args string) (types.Result, types.Error, in
 		panic(fmt.Errorf("failed to load netconf: %v", err))
 	}
 
+	cniEnv := []string {
+		fmt.Sprintf("CNI_COMMAND=%s", command),
+		fmt.Sprintf("CNI_ARGS=%s", args),
+		"CNI_CONTAINERID=a",
+		"CNI_NETNS=b",
+		"CNI_IFNAME=c",
+		"CNI_PATH=d",
+	}
+
 	// Run the CNI plugin passing in the supplied netconf
 	cmd := &exec.Cmd{
-		Env:  []string{"CNI_COMMAND=" + command, "CNI_CONTAINERID=a", "CNI_NETNS=b", "CNI_IFNAME=c", "CNI_PATH=d", "CNI_ARGS=" + args},
+		Env:  cniEnv,
 		Path: "dist/" + conf.IPAM.Type,
 	}
+
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		panic("some error found")
