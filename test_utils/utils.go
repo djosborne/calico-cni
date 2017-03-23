@@ -126,15 +126,11 @@ func RunIPAMPlugin(netconf, command, args string) (types.Result, types.Error, in
 	return result, error, exitCode
 }
 
-func CreateContainerNamespace() (containerNs ns.NetNS, containerId, netnspath string, err error) {
+func CreateContainerNamespace() (containerNs ns.NetNS, err error) {
 	containerNs, err = ns.NewNS()
 	if err != nil {
-		return nil, "", "", err
+		return nil, err
 	}
-
-	netnspath = containerNs.Path()
-	netnsname := path.Base(netnspath)
-	containerId = netnsname[:10]
 
 	err = containerNs.Do(func(_ ns.NetNS) error {
 		lo, err := netlink.LinkByName("lo")
@@ -148,19 +144,58 @@ func CreateContainerNamespace() (containerNs ns.NetNS, containerId, netnspath st
 }
 
 func CreateContainer(netconf string, k8sName string, ip string) (container_id, netnspath string, session *gexec.Session, contVeth netlink.Link, contAddr []netlink.Addr, contRoutes []netlink.Route, err error) {
-	targetNs, container_id, netnspath, err := CreateContainerNamespace()
+	targetNs, err := CreateContainerNamespace()
+	container_id, netnspath = GetContainerIdFromNs(targetNs)
 
 	if err != nil {
 		return "", "", nil, nil, nil, nil, err
 	}
 
+	CallCniAdd(netconf, k8sName, ip, targetNs)
+
+	contVeth, contAddr, contRoutes, err = GetNamespaceInfo(targetNs)
+
+	return
+}
+
+func GetNamespaceInfo(targetNs ns.NetNS) (contVeth netlink.Link, contAddr []netlink.Addr, contRoutes []netlink.Route, err error) {
+	err = targetNs.Do(func(_ ns.NetNS) error {
+		contVeth, err = netlink.LinkByName("eth0")
+		if err != nil {
+			return err
+		}
+
+		contAddr, err = netlink.AddrList(contVeth, syscall.AF_INET)
+		if err != nil {
+			return err
+		}
+
+		contRoutes, err = netlink.RouteList(contVeth, syscall.AF_INET)
+		if err != nil {
+			return err
+		}
+
+		return nil
+	})
+	return
+}
+
+func GetContainerIdFromNs(containerNs ns.NetNS) (containerId string, netnspath string) {
+	netnspath = containerNs.Path()
+	netnsname := path.Base(netnspath)
+	containerId = netnsname[:10]
+	return containerId, netnspath
+}
+
+func CallCniAdd(netconf string, k8sName string, ip string, containerNs ns.NetNS) (contVeth netlink.Link, err error) {
+	containerId, netNsPath := GetContainerIdFromNs(containerNs)
 	// Set up the env for running the CNI plugin
 	cni_env := []string{
 		"CNI_COMMAND=ADD",
 		"CNI_IFNAME=eth0",
 		"CNI_PATH=dist",
-		fmt.Sprintf("CNI_CONTAINERID=%s", container_id),
-		fmt.Sprintf("CNI_NETNS=%s", netnspath),
+		fmt.Sprintf("CNI_CONTAINERID=%s", containerId),
+		fmt.Sprintf("CNI_NETNS=%s", netNsPath),
 	}
 
 	if k8sName != "" {
@@ -188,27 +223,9 @@ func CreateContainer(netconf string, k8sName string, ip string) (container_id, n
 	io.WriteString(stdin, "\n")
 	stdin.Close()
 
-	session, err = gexec.Start(subProcess, ginkgo.GinkgoWriter, ginkgo.GinkgoWriter)
+	session, err := gexec.Start(subProcess, ginkgo.GinkgoWriter, ginkgo.GinkgoWriter)
 	session.Wait(5)
 
-	err = targetNs.Do(func(_ ns.NetNS) error {
-		contVeth, err = netlink.LinkByName("eth0")
-		if err != nil {
-			return err
-		}
-
-		contAddr, err = netlink.AddrList(contVeth, syscall.AF_INET)
-		if err != nil {
-			return err
-		}
-
-		contRoutes, err = netlink.RouteList(contVeth, syscall.AF_INET)
-		if err != nil {
-			return err
-		}
-
-		return nil
-	})
 	return
 }
 
