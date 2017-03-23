@@ -206,16 +206,24 @@ func CreateContainer(netconf string, k8sName string, ip string) (container_id, n
 func DeleteContainer(netconf, netnspath, name string) (exitCode int, err error) {
 	netnsname := path.Base(netnspath)
 	container_id := netnsname[:10]
-	var k8s_env = ""
-	if name != "" {
-		k8s_env = fmt.Sprintf("CNI_ARGS=\"K8S_POD_NAME=%s;K8S_POD_NAMESPACE=test;K8S_POD_INFRA_CONTAINER_ID=whatever\"", name)
-	}
 
 	// Set up the env for running the CNI plugin
-	cni_env := fmt.Sprintf("CNI_COMMAND=DEL CNI_CONTAINERID=%s CNI_NETNS=%s CNI_IFNAME=eth0 CNI_PATH=dist %s", container_id, netnspath, k8s_env)
+	cniEnv := []string {
+		"CNI_COMMAND=DEL",
+		"CNI_IFNAME=eth0",
+		"CNI_PATH=dist",
+		fmt.Sprintf("CNI_CONTAINERID=%s", container_id),
+		fmt.Sprintf("CNI_NETNS=%s", netnspath),
+	}
+
+	if name != "" {
+		cniEnv = append(cniEnv, fmt.Sprintf("CNI_ARGS=K8S_POD_NAME=%s;K8S_POD_NAMESPACE=test;K8S_POD_INFRA_CONTAINER_ID=whatever", name))
+	}
 
 	// Run the CNI plugin passing in the supplied netconf
-	subProcess := exec.Command("bash", "-c", fmt.Sprintf("%s dist/%s", cni_env, os.Getenv("PLUGIN")), netconf)
+	subProcess := exec.Command(fmt.Sprintf("dist/%s", os.Getenv("PLUGIN")), netconf)
+	subProcess.Env = cniEnv
+
 	stdin, err := subProcess.StdinPipe()
 	if err != nil {
 		return
