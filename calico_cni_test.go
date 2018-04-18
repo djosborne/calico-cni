@@ -483,8 +483,12 @@ var _ = Describe("CalicoCni", func() {
 				containerNs, containerId, err := testutils.CreateContainerNamespace()
 				Expect(err).ToNot(HaveOccurred())
 
-				s, _, _, _, err := testutils.RunCNIPluginWithId(netconf, "", testutils.K8S_TEST_NS, "", containerId, "", containerNs)
-				Eventually(s).Should(gexec.Exit())
+				result, _, err := testutils.ExecuteCNIPlugin(testutils.CreateArgs{
+					NetConf: netconf,
+					ContainerID: containerId,
+					PodNamespace: testutils.K8S_TEST_NS,
+				}, containerNs)
+				
 				Expect(s.Out).Should(gbytes.Say("requested feature is not supported for this runtime: ip_addrs_no_ipam"))
 			})
 		})
@@ -506,16 +510,16 @@ var _ = Describe("CalicoCni", func() {
 			}`, cniVersion, os.Getenv("ETCD_IP"), os.Getenv("DATASTORE_TYPE"))
 
 			It("nodename takes precedence over hostname", func() {
-				containerID, session, _, _, _, contNs, err := testutils.CreateContainerWithId(netconf, "", testutils.TEST_DEFAULT_NS, "", "abcd")
+				contNs, _, err := testutils.CreateContainerNamespace()
 				Expect(err).ShouldNot(HaveOccurred())
-				Eventually(session).Should(gexec.Exit())
 
-				result, err := testutils.GetResultForCurrent(session, cniVersion)
-				if err != nil {
-					log.Fatalf("Error getting result from the session: %v\n", err)
-				}
-
-				log.Printf("Unmarshalled result: %v\n", result)
+				cid := "abcd"
+				_, _, err = testutils.ExecuteCNIPlugin(testutils.CreateArgs{
+					NetConf: netconf,
+					ContainerID: cid,
+					PodNamespace: testutils.TEST_DEFAULT_NS,
+				}, contNs)
+				Expect(err).ShouldNot(HaveOccurred())
 
 				// The endpoint is created in etcd
 				endpoints, err := calicoClient.WorkloadEndpoints().List(ctx, options.ListOptions{})
@@ -527,7 +531,7 @@ var _ = Describe("CalicoCni", func() {
 					Orchestrator: "cni",
 					Endpoint:     "eth0",
 					Pod:          "",
-					ContainerID:  containerID,
+					ContainerID:  cid,
 				}
 
 				wrkload, err := ids.CalculateWorkloadEndpointName(false)
@@ -535,10 +539,9 @@ var _ = Describe("CalicoCni", func() {
 
 				Expect(endpoints.Items[0].Name).Should(Equal(wrkload))
 				Expect(endpoints.Items[0].Namespace).Should(Equal(testutils.TEST_DEFAULT_NS))
-
 				Expect(endpoints.Items[0].Spec.Node).Should(Equal("named-nodename"))
 
-				_, err = testutils.DeleteContainerWithId(netconf, contNs.Path(), "", testutils.TEST_DEFAULT_NS, containerID)
+				_, err = testutils.DeleteContainerWithId(netconf, contNs.Path(), "", testutils.TEST_DEFAULT_NS, cid)
 				Expect(err).ShouldNot(HaveOccurred())
 			})
 		})

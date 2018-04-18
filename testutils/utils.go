@@ -221,6 +221,8 @@ func RunIPAMPlugin(netconf, command, args, cniVersion string) (*current.Result, 
 	return result, error, exitCode
 }
 
+type ContainerNS ns.NetNS
+
 func CreateContainerNamespace() (containerNs ns.NetNS, containerId string, err error) {
 	containerNs, err = ns.NewNS()
 	if err != nil {
@@ -268,6 +270,109 @@ func CreateContainerWithId(netconf, podName, podNamespace, ip, overrideContainer
 	session, contVeth, contAddr, contRoutes, err = RunCNIPluginWithId(netconf, podName, podNamespace, ip, containerID, "", targetNs)
 
 	return
+}
+
+type CreateArgs struct {
+	NetConf string
+	PodName string
+	PodNamespace string
+	IP string
+	IFName string
+	ContainerID string // Optional
+}
+
+type Container struct {
+	ID string
+	Session *gexec.Session
+	Veth netlink.Link
+	Addrs []netlink.Addr
+	Routes []netlink.Route
+	Namespace ns.NetNS
+}
+
+func ExecuteCNIPlugin(args CreateArgs, targetNs ns.NetNS) (*current.Result, Container, error) {
+	// Set up the env for running the CNI plugin
+	k8sEnv := ""
+	if args.PodName != "" {
+		k8sEnv = fmt.Sprintf("CNI_ARGS=K8S_POD_NAME=%s;K8S_POD_NAMESPACE=%s;K8S_POD_INFRA_CONTAINER_ID=whatever", args.PodName, args.PodNamespace)
+
+		// Append IP=<ip> to CNI_ARGS only if it's not an empty string.
+		if args.IP != "" {
+			k8sEnv = fmt.Sprintf("%s;IP=%s", k8sEnv, args.IP)
+		}
+	}
+
+	if args.IFName== "" {
+		args.IFName = "eth0"
+	}
+
+	env := []string{
+		"CNI_COMMAND=ADD",
+		fmt.Sprintf("CNI_IFNAME=%s", args.IFName),
+		fmt.Sprintf("CNI_PATH=%s", os.Getenv("DIST")),
+		fmt.Sprintf("CNI_CONTAINERID=%s", args.ContainerID),
+		fmt.Sprintf("CNI_NETNS=%s", targetNs.Path()),
+		k8sEnv,
+	}
+
+	log.Debugf("Calling CNI plugin with the following env vars: %v", env)
+
+	// Run the CNI plugin passing in the supplied netconf
+	subProcess := exec.Command(fmt.Sprintf("%s/%s", os.Getenv("DIST"), os.Getenv("PLUGIN")), args.NetConf)
+	subProcess.Env = env
+	stdin, err := subProcess.StdinPipe()
+	if err != nil {
+		panic("some error found")
+	}
+
+	_, err = io.WriteString(stdin, args.NetConf)
+	if err != nil {
+		panic(err)
+	}
+	_, err = io.WriteString(stdin, "\n")
+	if err != nil {
+		panic(err)
+	}
+
+	err = stdin.Close()
+	if err != nil {
+		panic(err)
+	}
+
+	session, err := gexec.Start(subProcess, ginkgo.GinkgoWriter, ginkgo.GinkgoWriter)
+	session.Wait(5)
+	if err != nil {
+		panic(err)
+	}
+
+	// TODO: don't hardcode cniVersion
+	result, err := GetResultForCurrent(session, "v0.3.0")
+	if err != nil {
+		return nil, nil, fmt.Errorf("Error getting result from the session: %v\n", err)
+	}
+
+	// todo: maybe expose this via GetContInfo()
+	c := Container{}
+	err = targetNs.Do(func(_ ns.NetNS) error {
+		c.Veth, err = netlink.LinkByName(args.IFName)
+		if err != nil {
+			return err
+		}
+
+		c.Addrs, err = netlink.AddrList(c.Veth, syscall.AF_INET)
+		if err != nil {
+			return err
+		}
+
+		c.Routes, err = netlink.RouteList(c.Veth, syscall.AF_INET)
+		if err != nil {
+			return err
+		}
+
+		return nil
+	})
+
+	return result, c, err
 }
 
 // RunCNIPluginWithId calls CNI plugin with a containerID and targetNs passed to it.
